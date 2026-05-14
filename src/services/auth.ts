@@ -16,27 +16,26 @@ export const signInWithGoogle = async (role: UserRole = 'rider') => {
     const result = await signInWithPopup(auth, googleProvider);
     const user = result.user;
     
-    // Check if user profile exists
     const userDoc = await getDoc(doc(db, 'users', user.uid));
     
     if (!userDoc.exists()) {
-      const profile: Partial<UserProfile> = {
+      // FIX: Do NOT mix serverTimestamp() with a plain string for the same field.
+      // The Firestore rule checks: data.updatedAt == request.time
+      // So we must use serverTimestamp() for updatedAt (and optionally createdAt).
+      // We omit createdAt from the isValidUser check, so it's safe to use serverTimestamp here.
+      await setDoc(doc(db, 'users', user.uid), {
         uid: user.uid,
         email: user.email || '',
         displayName: user.displayName || '',
         photoURL: user.photoURL || '',
         role: role,
         status: 'online',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      await setDoc(doc(db, 'users', user.uid), {
-        ...profile,
-        createdAt: serverTimestamp(),
+        // FIX: Use serverTimestamp() — NOT new Date().toISOString()
+        // The Firestore rule requires updatedAt == request.time for user creation.
         updatedAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
       });
     } else {
-      // Update role if explicitly requested and different
       const currentData = userDoc.data();
       if (currentData.role !== role) {
         await setDoc(doc(db, 'users', user.uid), {
