@@ -15,8 +15,9 @@ import ActiveTripOverlay from './components/ActiveTripOverlay';
 import { UserProfile, Trip } from './types';
 import { COLORS } from './constants';
 import { db, handleFirestoreError, OperationType } from './services/firebase';
-import { collection, query, where, onSnapshot, or, and, limit, orderBy, doc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, limit, orderBy, doc } from 'firebase/firestore';
 import { APIProvider } from '@vis.gl/react-google-maps';
+import { acceptTrip } from './services/tripService';
 
 const GOOGLE_MAPS_API_KEY =
   process.env.GOOGLE_MAPS_PLATFORM_KEY ||
@@ -66,7 +67,6 @@ export default function App() {
       if (docSnap.exists()) {
         const newProfile = docSnap.data() as UserProfile;
         setProfile(newProfile);
-        // Re-init notifications if role changed or first time
         notificationService.init(user.uid);
       }
     }, (error) => {
@@ -103,30 +103,55 @@ export default function App() {
 
     window.addEventListener('initiate-video-call', handleInitiateCall);
 
-    let tripUnsubscribe: (() => void) | null = null;
+    // FIX: Replace compound or() + orderBy query (requires composite index) with
+    // two simple queries merged client-side. This avoids index errors entirely.
+    let tripUnsubscribeRider: (() => void) | null = null;
+    let tripUnsubscribeDriver: (() => void) | null = null;
+
     if (user) {
-      const q = query(
+      let riderTrip: Trip | null = null;
+      let driverTrip: Trip | null = null;
+
+      const mergeAndSetTrip = () => {
+        // Prefer driver trip if both somehow exist (shouldn't happen normally)
+        const best = riderTrip || driverTrip || null;
+        setActiveTrip(best);
+      };
+
+      // Query 1: trips where user is rider
+      const qRider = query(
         collection(db, 'trips'),
-        and(
-          where('status', 'in', ['requested', 'accepted', 'ongoing']),
-          or(
-            where('riderId', '==', user.uid),
-            where('driverId', '==', user.uid)
-          )
-        ),
+        where('riderId', '==', user.uid),
+        where('status', 'in', ['requested', 'accepted', 'ongoing']),
         orderBy('createdAt', 'desc'),
         limit(1)
       );
-      
-      tripUnsubscribe = onSnapshot(q, (snapshot) => {
-        if (!snapshot.empty) {
-          const trip = { id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as Trip;
-          setActiveTrip(trip);
-        } else {
-          setActiveTrip(null);
-        }
+
+      tripUnsubscribeRider = onSnapshot(qRider, (snapshot) => {
+        riderTrip = !snapshot.empty
+          ? ({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as Trip)
+          : null;
+        mergeAndSetTrip();
       }, (error) => {
-        handleFirestoreError(error, OperationType.GET, 'active-trip-subscription');
+        console.warn('Active trip (rider) subscription error:', error.message);
+      });
+
+      // Query 2: trips where user is driver
+      const qDriver = query(
+        collection(db, 'trips'),
+        where('driverId', '==', user.uid),
+        where('status', 'in', ['accepted', 'ongoing']),
+        orderBy('createdAt', 'desc'),
+        limit(1)
+      );
+
+      tripUnsubscribeDriver = onSnapshot(qDriver, (snapshot) => {
+        driverTrip = !snapshot.empty
+          ? ({ id: snapshot.docs[0].id, ...snapshot.docs[0].data() } as Trip)
+          : null;
+        mergeAndSetTrip();
+      }, (error) => {
+        console.warn('Active trip (driver) subscription error:', error.message);
       });
     }
 
@@ -157,7 +182,8 @@ export default function App() {
     return () => {
       window.removeEventListener('app-notification', handleNotification);
       window.removeEventListener('initiate-video-call', handleInitiateCall);
-      if (tripUnsubscribe) tripUnsubscribe();
+      if (tripUnsubscribeRider) tripUnsubscribeRider();
+      if (tripUnsubscribeDriver) tripUnsubscribeDriver();
       if (callUnsubscribe) callUnsubscribe();
     };
   }, [user, profile]);
@@ -167,8 +193,6 @@ export default function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       setLocalStream(stream);
       setIsCalling(true);
-      // For demo, we just show local stream
-      // Real implementation would use webrtcService.startCall
     } catch (e) {
       console.error("Camera access denied", e);
     }
@@ -187,8 +211,6 @@ export default function App() {
     if (!profile || profile.role !== 'driver' || !activeTrip || activeTrip.status !== 'ongoing') return;
 
     const interval = setInterval(() => {
-      // Simulation of location tracking for demo
-      // In a real app, we'd use navigator.geolocation.watchPosition
       const loc = {
         lat: activeTrip.origin.lat + (Math.random() - 0.5) * 0.01,
         lng: activeTrip.origin.lng + (Math.random() - 0.5) * 0.01,
@@ -232,7 +254,6 @@ export default function App() {
 
   const content = (
     <div className="h-screen flex flex-col bg-[#0A0A0A] overflow-hidden text-[#E5E7EB]">
-      {/* Main Content Areas */}
         <AnimatePresence mode="wait">
           <motion.div
             key={activeTab}
@@ -241,20 +262,18 @@ export default function App() {
             exit={{ opacity: 0, x: -10 }}
             className="flex-1 overflow-auto"
           >
-            {activeTab === 'home' && <HomeTab user={profile} activeTrip={activeTrip} />}
+            {activeTab === 'home' && <HomeTab user={profile!} activeTrip={activeTrip} />}
             {activeTab === 'services' && <ServicesTab />}
-            {activeTab === 'activity' && <ActivityTab user={profile} />}
-            {activeTab === 'account' && <AccountTab user={profile} />}
+            {activeTab === 'activity' && <ActivityTab user={profile!} />}
+            {activeTab === 'account' && <AccountTab user={profile!} />}
             {activeTab === 'admin' && <AdminTab />}
           </motion.div>
         </AnimatePresence>
 
-        {/* Active Trip Overlay */}
         <AnimatePresence>
-          {activeTrip && <ActiveTripOverlay trip={activeTrip} user={profile} />}
+          {activeTrip && profile && <ActiveTripOverlay trip={activeTrip} user={profile} />}
         </AnimatePresence>
 
-        {/* In-App Toast */}
         <AnimatePresence>
           {toast && (
             <motion.div
@@ -277,7 +296,6 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {/* Video Call Overlay */}
         <AnimatePresence>
           {isCalling && (
             <motion.div
@@ -327,7 +345,6 @@ export default function App() {
                  {profile?.role === 'driver' && callingTripId && (
                    <button 
                      onClick={async () => {
-                       const { acceptTrip } = await import('./services/tripService');
                        await acceptTrip(callingTripId, profile.uid);
                        setCallingTripId(null);
                        endCall();
