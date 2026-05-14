@@ -1,0 +1,6 @@
+{
+  "name": "adaidata",
+  "description": "A comprehensive trip and delivery application with real-time ride tracking, package delivery management, and integrated video communication.",
+  "requestFramePermissions": ["camera", "microphone", "geolocation"],
+  "majorCapabilities": ["real-time tracking", "video calls", "trip management"]
+}

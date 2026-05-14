@@ -1,0 +1,161 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile information",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["rider", "driver"] },
+        "currentTripId": { "type": "string" },
+        "status": { "type": "string", "enum": ["online", "offline", "busy"] },
+        "fcmToken": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Trip": {
+      "title": "Trip",
+      "description": "Information about a ride or delivery trip",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "riderId": { "type": "string" },
+        "driverId": { "type": "string" },
+        "type": { "type": "string", "enum": ["ride", "delivery"] },
+        "status": { "type": "string", "enum": ["requested", "accepted", "ongoing", "completed", "cancelled"] },
+        "origin": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" },
+            "address": { "type": "string" }
+          }
+        },
+        "destination": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" },
+            "address": { "type": "string" }
+          }
+        },
+        "currentLocation": {
+          "type": "object",
+          "properties": {
+            "lat": { "type": "number" },
+            "lng": { "type": "number" }
+          }
+        },
+        "price": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["riderId", "type", "status", "origin", "destination"]
+    },
+    "Call": {
+       "title": "Call",
+       "description": "WebRTC signaling data for video calls",
+       "type": "object",
+       "properties": {
+         "id": { "type": "string" },
+         "callerId": { "type": "string" },
+         "receiverId": { "type": "string" },
+         "status": { "type": "string", "enum": ["negotiating", "active", "ended"] },
+         "offer": { "type": "object" },
+         "answer": { "type": "object" },
+         "callerCandidates": { "type": "array" },
+         "receiverCandidates": { "type": "array" },
+         "createdAt": { "type": "string", "format": "date-time" }
+       }
+    },
+    "Rating": {
+      "title": "Rating",
+      "description": "User ratings and reviews",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "tripId": { "type": "string" },
+        "fromId": { "type": "string" },
+        "toId": { "type": "string" },
+        "rating": { "type": "number", "minimum": 1, "maximum": 5 },
+        "comment": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["tripId", "fromId", "toId", "rating"]
+    },
+    "Ticket": {
+      "title": "Ticket",
+      "description": "Support tickets",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "subject": { "type": "string" },
+        "message": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "pending", "closed"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "subject", "message", "status"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "Chat messages within a trip",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string" },
+        "senderId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["text", "senderId", "createdAt"]
+    },
+    "PaymentMethod": {
+      "title": "PaymentMethod",
+      "description": "User payment methods",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["card", "paypal", "cash"] },
+        "lastFour": { "type": "string" },
+        "isDefault": { "type": "boolean" }
+      },
+      "required": ["userId", "type"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles"
+    },
+    "/trips/{tripId}": {
+      "schema": "Trip",
+      "description": "Trips and deliveries"
+    },
+    "/trips/{tripId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Chat messages for a trip"
+    },
+    "/calls/{callId}": {
+      "schema": "Call",
+      "description": "Video call signaling"
+    },
+    "/ratings/{ratingId}": {
+      "schema": "Rating",
+      "description": "Trip reviews"
+    },
+    "/tickets/{ticketId}": {
+      "schema": "Ticket",
+      "description": "Support requests"
+    },
+    "/users/{userId}/paymentMethods/{methodId}": {
+      "schema": "PaymentMethod",
+      "description": "Saved payment methods"
+    }
+  }
+}

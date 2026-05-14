@@ -1,0 +1,173 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitive Definition
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'ikhalil520@gmail.com' ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin'
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Phase 4: Entity Validators
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'updatedAt']) &&
+             data.uid == request.auth.uid &&
+             data.email is string && data.email.size() <= 128 &&
+             data.role in ['rider', 'driver', 'admin'] &&
+             data.updatedAt == request.time &&
+             (!data.keys().contains('displayName') || (data.displayName is string && data.displayName.size() <= 64)) &&
+             (!data.keys().contains('photoURL') || (data.photoURL is string && data.photoURL.size() <= 512)) &&
+             (!data.keys().contains('status') || data.status in ['online', 'offline', 'busy']);
+    }
+
+    function isValidTrip(data) {
+      return data.keys().hasAll(['riderId', 'status', 'origin', 'destination', 'price', 'createdAt', 'updatedAt']) &&
+             data.riderId is string && isValidId(data.riderId) &&
+             data.status in ['requested', 'accepted', 'ongoing', 'completed', 'cancelled'] &&
+             data.origin.lat is number && data.origin.lng is number &&
+             data.origin.address is string && data.origin.address.size() <= 256 &&
+             data.destination.lat is number && data.destination.lng is number &&
+             data.destination.address is string && data.destination.address.size() <= 256 &&
+             data.price is number && data.price >= 0 &&
+             data.updatedAt == request.time;
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['text', 'senderId', 'createdAt']) &&
+             data.text is string && data.text.size() > 0 && data.text.size() <= 1000 &&
+             data.senderId == request.auth.uid &&
+             data.createdAt == request.time;
+    }
+
+    function isValidCall(data) {
+      return data.keys().hasAll(['callerId', 'receiverId', 'status', 'createdAt']) &&
+             data.callerId is string && isValidId(data.callerId) &&
+             data.receiverId is string && isValidId(data.receiverId) &&
+             data.status in ['negotiating', 'active', 'ended'] &&
+             data.createdAt == request.time;
+    }
+
+    // Mandatory match blocks for every collection
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if (isSignedIn()) && (
+        (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'status', 'updatedAt', 'fcmToken', 'currentTripId', 'role'])) ||
+        (isOwner(userId) && incoming().diff(existing()).affectedKeys().hasOnly(['earnings', 'tripCount', 'updatedAt'])) ||
+        // Action: Receive Rating (one user can update another's rating stats)
+        (incoming().diff(existing()).affectedKeys().hasOnly(['rating', 'ratingCount', 'updatedAt'])) ||
+        isAdmin()
+      );
+
+      match /paymentMethods/{methodId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    match /trips/{tripId} {
+      allow read: if isSignedIn() && (
+        isAdmin() ||
+        resource.data.riderId == request.auth.uid || 
+        resource.data.driverId == request.auth.uid ||
+        resource.data.status == 'requested'
+      );
+      
+      allow create: if isSignedIn() && incoming().riderId == request.auth.uid && isValidTrip(incoming()) && incoming().createdAt == request.time;
+      
+      allow update: if (isSignedIn() && (
+        isAdmin() ||
+        (incoming().createdAt == existing().createdAt && (
+          // Action: Accept Trip
+          (existing().status == 'requested' && incoming().status == 'accepted' && 
+           incoming().diff(existing()).affectedKeys().hasOnly(['driverId', 'status', 'updatedAt']) && 
+           incoming().driverId == request.auth.uid) ||
+          // Action: Progress Trip
+          (existing().driverId == request.auth.uid && 
+           ( (existing().status == 'accepted' && incoming().status == 'ongoing') || (existing().status == 'ongoing' && incoming().status == 'completed') ) &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt', 'currentLocation'])) ||
+          // Action: Cancel Trip
+          ((existing().riderId == request.auth.uid || existing().driverId == request.auth.uid) &&
+           existing().status in ['requested', 'accepted'] && incoming().status == 'cancelled' &&
+           incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])) ||
+          // Action: Update Location
+          (existing().driverId == request.auth.uid && 
+           incoming().diff(existing()).affectedKeys().hasOnly(['currentLocation', 'updatedAt']))
+        ))
+      ));
+
+      allow delete: if isSignedIn() && (
+        isAdmin() ||
+        (existing().riderId == request.auth.uid && existing().status in ['requested', 'completed', 'cancelled'])
+      );
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && (
+          isAdmin() ||
+          get(/databases/$(database)/documents/trips/$(tripId)).data.riderId == request.auth.uid ||
+          get(/databases/$(database)/documents/trips/$(tripId)).data.driverId == request.auth.uid
+        );
+        allow create: if isSignedIn() && (
+          get(/databases/$(database)/documents/trips/$(tripId)).data.riderId == request.auth.uid ||
+          get(/databases/$(database)/documents/trips/$(tripId)).data.driverId == request.auth.uid
+        ) && isValidMessage(incoming());
+      }
+    }
+
+    match /calls/{callId} {
+      allow read: if isSignedIn() && (
+        isAdmin() ||
+        resource.data.callerId == request.auth.uid || 
+        resource.data.receiverId == request.auth.uid
+      );
+      allow create: if isSignedIn() && (
+        incoming().callerId == request.auth.uid ||
+        incoming().receiverId == request.auth.uid
+      ) && isValidCall(incoming());
+      
+      allow update: if isSignedIn() && (
+        isAdmin() ||
+        (existing().callerId == request.auth.uid || existing().receiverId == request.auth.uid) &&
+        incoming().diff(existing()).affectedKeys().hasAny(['offer', 'answer', 'callerCandidates', 'receiverCandidates', 'status', 'updatedAt'])
+      );
+    }
+
+    match /ratings/{ratingId} {
+      allow read: if isSignedIn();
+      allow create: if isSignedIn() && incoming().fromId == request.auth.uid && 
+                    exists(/databases/$(database)/documents/trips/$(incoming().tripId));
+    }
+
+    match /tickets/{ticketId} {
+      allow read: if isSignedIn() && (isAdmin() || resource.data.userId == request.auth.uid);
+      allow create: if isSignedIn() && incoming().userId == request.auth.uid;
+      allow update: if isAdmin() || (isSignedIn() && existing().userId == request.auth.uid && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']));
+    }
+  }
+}
