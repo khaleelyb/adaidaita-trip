@@ -18,19 +18,15 @@ import { Trip, TripStatus, Location, UserRole } from '../types';
 
 export const requestTrip = async (riderId: string, origin: Location, destination: Location, price: number) => {
   try {
-    const tripData: Partial<Trip> = {
+    // FIX: Only use serverTimestamp(), do NOT include a string createdAt.
+    // The Firestore rule checks: data.createdAt == request.time (i.e. serverTimestamp)
+    const docRef = await addDoc(collection(db, 'trips'), {
       riderId,
       type: 'ride',
       status: 'requested',
       origin,
       destination,
       price,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    const docRef = await addDoc(collection(db, 'trips'), {
-      ...tripData,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -69,6 +65,7 @@ export const updateTripLocation = async (tripId: string, location: Location) => 
 export const startTrip = async (tripId: string) => {
   try {
     const tripRef = doc(db, 'trips', tripId);
+    // FIX: Rules for "Progress Trip" allow ['status', 'updatedAt', 'currentLocation'] only
     await updateDoc(tripRef, {
       status: 'ongoing',
       updatedAt: serverTimestamp(),
@@ -80,12 +77,16 @@ export const startTrip = async (tripId: string) => {
 
 export const completeTrip = async (tripId: string, driverId?: string, price: number = 0) => {
   try {
+    // FIX: Split into two separate updates.
+    // Update 1: Trip status change — matches "Progress Trip" rule (only status + updatedAt)
     const tripRef = doc(db, 'trips', tripId);
     await updateDoc(tripRef, {
       status: 'completed',
       updatedAt: serverTimestamp(),
     });
 
+    // Update 2: Driver earnings — matches the separate earnings rule block in Firestore rules
+    // Rule allows: ['earnings', 'tripCount', 'updatedAt'] for the owner
     if (driverId) {
       const driverRef = doc(db, 'users', driverId);
       await updateDoc(driverRef, {
