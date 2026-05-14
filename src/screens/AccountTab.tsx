@@ -12,15 +12,11 @@ import {
   ArrowLeft,
   Plus,
   Clock,
-  Database,
-  Trash2
 } from 'lucide-react';
 import { UserProfile, PaymentMethod, SupportTicket } from '../types';
 import { logout, updateUserProfile } from '../services/auth';
-import { COLORS } from '../constants';
 import { getPaymentMethods, addPaymentMethod } from '../services/userService';
 import { getMyTickets, createTicket } from '../services/ticketService';
-import { seedDemoTrips, clearOldTrips } from '../services/seedService';
 
 interface AccountTabProps {
   user: UserProfile;
@@ -56,10 +52,10 @@ export default function AccountTab({ user }: AccountTabProps) {
 
   const menuItems = [
     { icon: CreditCard, label: 'Payment', color: '#4A90E2', desc: 'Manage your payment methods' },
-    { icon: Video, label: 'Video Call Support', color: '#F27D26', desc: 'Live assistance via video' },
+    { icon: Video, label: 'Video Call Support', color: '#3B82F6', desc: 'Live assistance via video' },
     { icon: Shield, label: 'Safety', color: '#50E3C2', desc: 'Emergency contacts & tracking' },
     { icon: MessageSquare, label: 'Messages', color: '#D0021B', desc: 'Chat with support' },
-    { icon: Settings, label: 'Settings', color: '#141414', desc: 'Account & app preferences' },
+    { icon: Settings, label: 'Settings', color: '#1f2937', desc: 'Account & app preferences' },
     { icon: HelpCircle, label: 'Help & Support', color: '#8E9299', desc: 'Support history & FAQ' },
   ];
 
@@ -262,12 +258,12 @@ export default function AccountTab({ user }: AccountTabProps) {
             animate={{ opacity: 1, x: 0 }}
             transition={{ delay: i * 0.05 }}
             onClick={() => setActiveSubView(item.label)}
-            className="glass-morphism flex items-center justify-between p-4.5 rounded-2xl cursor-pointer hover:bg-white/5 transition-all group border-white/5"
+            className="glass-morphism flex items-center justify-between p-4 rounded-2xl cursor-pointer hover:bg-white/5 transition-all group border-white/5"
           >
             <div className="flex items-center gap-4">
               <div 
                 className="w-11 h-11 rounded-2xl flex items-center justify-center text-white shadow-lg"
-                style={{ backgroundColor: item.label === 'Video Call Support' ? '#3B82F6' : (item.color === '#141414' ? '#1f2937' : item.color) }}
+                style={{ backgroundColor: item.color }}
               >
                 <item.icon size={20} />
               </div>
@@ -284,48 +280,6 @@ export default function AccountTab({ user }: AccountTabProps) {
           <LogOut size={20} />
           Log Out
         </button>
-
-        {/* Developer Options Section */}
-        <div className="mt-12 space-y-4">
-          <div className="flex items-center gap-3 px-4">
-            <div className="w-1 h-1 bg-yellow-500 rounded-full" />
-            <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Developer Options</span>
-          </div>
-          
-          <div className="glass-morphism p-6 rounded-[2rem] border-yellow-500/10 space-y-4">
-            <button 
-              onClick={async () => {
-                if(confirm('Seed demo data? This will add 4 mock trips.')) {
-                  await seedDemoTrips(user.uid);
-                  alert('Data seeded successfully!');
-                }
-              }}
-              className="w-full bg-white/5 hover:bg-white/10 text-gray-300 p-4 rounded-xl flex items-center justify-between group transition-all"
-            >
-              <div className="flex items-center gap-3">
-                <Database size={18} className="text-blue-400" />
-                <span className="text-xs font-bold">Seed Demo Trips</span>
-              </div>
-              <ChevronRight size={16} className="text-gray-600 group-hover:text-white" />
-            </button>
-
-            <button 
-              onClick={async () => {
-                if(confirm('Clear all trip data? This cannot be undone.')) {
-                  await clearOldTrips();
-                  alert('Trip data cleared.');
-                }
-              }}
-              className="w-full bg-red-500/5 hover:bg-red-500/10 text-red-400 p-4 rounded-xl flex items-center justify-between group transition-all"
-            >
-              <div className="flex items-center gap-3">
-                <Trash2 size={18} />
-                <span className="text-xs font-bold">Clear All History</span>
-              </div>
-              <ChevronRight size={16} className="text-gray-400 group-hover:text-red-400" />
-            </button>
-          </div>
-        </div>
       </div>
 
       <p className="text-center text-[10px] text-gray-600 mt-6 uppercase tracking-[0.3em] font-bold">
