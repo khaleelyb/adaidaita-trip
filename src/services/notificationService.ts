@@ -1,13 +1,13 @@
 import { getToken, onMessage, Messaging } from 'firebase/messaging';
-import { doc, updateDoc, onSnapshot, collection, query, where, limit, orderBy, getDoc, or, and } from 'firebase/firestore';
+import { doc, updateDoc, onSnapshot, collection, query, where, limit, orderBy, getDoc } from 'firebase/firestore';
 import { db, getFirebaseMessaging, handleFirestoreError, OperationType } from './firebase';
-import { Trip, TripStatus } from '../types';
+import { Trip } from '../types';
 
 export class NotificationService {
   private messaging: Messaging | null = null;
-  private unsubscribeTripListener: (() => void) | null = null;
+  private unsubscribeRiderListener: (() => void) | null = null;
+  private unsubscribeDriverListener: (() => void) | null = null;
   private unsubscribeCallListener: (() => void) | null = null;
-  private seenTripIds = new Set<string>();
 
   async init(userId: string) {
     this.messaging = await getFirebaseMessaging();
@@ -16,12 +16,10 @@ export class NotificationService {
         const permission = await Notification.requestPermission();
         if (permission === 'granted') {
           const token = await getToken(this.messaging, {
-            vapidKey: 'YOUR_VAPID_KEY' // Usually provided in firebase console, but optional for internal testing sometimes
+            vapidKey: 'YOUR_VAPID_KEY'
           });
           if (token) {
-            await updateDoc(doc(db, 'users', userId), {
-              fcmToken: token
-            });
+            await updateDoc(doc(db, 'users', userId), { fcmToken: token });
           }
         }
       } catch (err) {
@@ -29,19 +27,21 @@ export class NotificationService {
       }
 
       onMessage(this.messaging, (payload) => {
-        console.log('Foreground message received:', payload);
-        // Show in-app notification logic can go here
-        this.showToast(payload.notification?.title || 'Notification', payload.notification?.body || '');
+        this.showToast(
+          payload.notification?.title || 'Notification',
+          payload.notification?.body || ''
+        );
       });
     }
 
-    // Secondary in-app notification system via Firestore listeners
     this.setupTripListeners(userId);
     this.setupCallListeners(userId);
   }
 
   private async setupTripListeners(userId: string) {
-    if (this.unsubscribeTripListener) this.unsubscribeTripListener();
+    // Clean up previous listeners
+    if (this.unsubscribeRiderListener) this.unsubscribeRiderListener();
+    if (this.unsubscribeDriverListener) this.unsubscribeDriverListener();
 
     const userDoc = await getDoc(doc(db, 'users', userId));
     if (!userDoc.exists()) {
@@ -49,47 +49,81 @@ export class NotificationService {
       setTimeout(() => this.setupTripListeners(userId), 2000);
       return;
     }
+
     const userData = userDoc.data();
     const isDriver = userData?.role === 'driver';
 
-    const q = isDriver 
-      ? query(
-          collection(db, 'trips'), 
-          or(
-            where('status', '==', 'requested'),
-            and(
-              where('driverId', '==', userId),
-              where('status', 'in', ['accepted', 'ongoing'])
-            )
-          ),
-          orderBy('updatedAt', 'desc'), 
-          limit(10)
-        )
-      : query(
-          collection(db, 'trips'), 
-          where('riderId', '==', userId), 
-          orderBy('updatedAt', 'desc'), 
-          limit(5)
-        );
+    if (isDriver) {
+      // FIX: Replace compound or() query with two separate simple queries.
+      // Query 1: New incoming requests (all drivers can see these)
+      const qRequested = query(
+        collection(db, 'trips'),
+        where('status', '==', 'requested'),
+        orderBy('updatedAt', 'desc'),
+        limit(10)
+      );
 
-    this.unsubscribeTripListener = onSnapshot(q, (snapshot) => {
-      snapshot.docChanges().forEach((change) => {
-        const trip = { id: change.doc.id, ...change.doc.data() } as Trip;
-        if (change.type === 'added' && isDriver && trip.status === 'requested') {
-          this.showToast('New Trip Request', `New ride requested nearby for ₦${trip.price.toLocaleString()}`);
-        } else if (change.type === 'modified') {
-          this.handleTripStatusChange(trip);
+      this.unsubscribeRiderListener = onSnapshot(qRequested, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          const trip = { id: change.doc.id, ...change.doc.data() } as Trip;
+          if (change.type === 'added') {
+            this.showToast(
+              'New Trip Request',
+              `New ride requested nearby for ₦${trip.price.toLocaleString()}`
+            );
+          }
+        });
+      }, (error) => {
+        // Silently ignore permission errors during auth state transition
+        if (!error.message.includes('insufficient permissions')) {
+          console.warn('Notification trip-listener error:', error.message);
         }
       });
-    }, (error) => {
-      if (error.message.includes('insufficient permissions')) {
-        console.warn('Permissions error in trips-listener. Might be initial auth state delay.');
-        return; 
-      }
-      if (this.unsubscribeTripListener) {
-        handleFirestoreError(error, OperationType.GET, 'trips-listener');
-      }
-    });
+
+      // Query 2: Trips this driver has accepted/is driving
+      const qDriverTrips = query(
+        collection(db, 'trips'),
+        where('driverId', '==', userId),
+        where('status', 'in', ['accepted', 'ongoing']),
+        orderBy('updatedAt', 'desc'),
+        limit(5)
+      );
+
+      this.unsubscribeDriverListener = onSnapshot(qDriverTrips, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'modified') {
+            const trip = { id: change.doc.id, ...change.doc.data() } as Trip;
+            this.handleTripStatusChange(trip);
+          }
+        });
+      }, (error) => {
+        if (!error.message.includes('insufficient permissions')) {
+          console.warn('Notification driver-trip-listener error:', error.message);
+        }
+      });
+
+    } else {
+      // Rider: watch their own trips for status changes
+      const qRiderTrips = query(
+        collection(db, 'trips'),
+        where('riderId', '==', userId),
+        orderBy('updatedAt', 'desc'),
+        limit(5)
+      );
+
+      this.unsubscribeRiderListener = onSnapshot(qRiderTrips, (snapshot) => {
+        snapshot.docChanges().forEach((change) => {
+          if (change.type === 'modified') {
+            const trip = { id: change.doc.id, ...change.doc.data() } as Trip;
+            this.handleTripStatusChange(trip);
+          }
+        });
+      }, (error) => {
+        if (!error.message.includes('insufficient permissions')) {
+          console.warn('Notification rider-trip-listener error:', error.message);
+        }
+      });
+    }
   }
 
   private setupCallListeners(userId: string) {
@@ -109,58 +143,38 @@ export class NotificationService {
         }
       });
     }, (error) => {
-      if (this.unsubscribeCallListener) {
-        handleFirestoreError(error, OperationType.GET, 'calls-listener');
+      if (!error.message.includes('insufficient permissions')) {
+        console.warn('Notification call-listener error:', error.message);
       }
     });
   }
 
   private handleTripStatusChange(trip: Trip) {
-    let title = '';
-    let body = '';
+    const messages: Record<string, { title: string; body: string }> = {
+      accepted: { title: 'Trip Accepted', body: 'A driver has accepted your request!' },
+      ongoing:  { title: 'Trip Started',  body: 'Your trip is now underway.' },
+      completed:{ title: 'Trip Completed',body: 'You have arrived at your destination.' },
+      cancelled:{ title: 'Trip Cancelled',body: 'Your trip has been cancelled.' },
+    };
 
-    switch (trip.status) {
-      case 'accepted':
-        title = 'Trip Accepted';
-        body = `A driver has accepted your request!`;
-        break;
-      case 'ongoing':
-        title = 'Trip Started';
-        body = 'Your trip is now underway.';
-        break;
-      case 'completed':
-        title = 'Trip Completed';
-        body = 'You have arrived at your destination.';
-        break;
-      case 'cancelled':
-        title = 'Trip Cancelled';
-        body = 'Your trip has been cancelled.';
-        break;
-    }
-
-    if (title) {
-      this.showToast(title, body);
-    }
+    const msg = messages[trip.status];
+    if (msg) this.showToast(msg.title, msg.body);
   }
 
   private showToast(title: string, body: string) {
-    // This is a browser notification as fallback
     if (Notification.permission === 'granted') {
       new Notification(title, { body });
     }
-    // You could also dispatch a custom event for the UI to show a toast
     window.dispatchEvent(new CustomEvent('app-notification', { detail: { title, body } }));
   }
 
   stop() {
-    if (this.unsubscribeTripListener) {
-      this.unsubscribeTripListener();
-      this.unsubscribeTripListener = null;
-    }
-    if (this.unsubscribeCallListener) {
-      this.unsubscribeCallListener();
-      this.unsubscribeCallListener = null;
-    }
+    this.unsubscribeRiderListener?.();
+    this.unsubscribeRiderListener = null;
+    this.unsubscribeDriverListener?.();
+    this.unsubscribeDriverListener = null;
+    this.unsubscribeCallListener?.();
+    this.unsubscribeCallListener = null;
   }
 }
 
